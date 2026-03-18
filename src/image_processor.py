@@ -6,6 +6,7 @@
 
 import json
 import os
+import re
 from typing import Dict, List, Optional
 from PIL import Image
 import requests
@@ -120,7 +121,6 @@ class ImageProcessor:
         """从URL加载图像"""
         response = requests.get(url, timeout=30)
         response.raise_for_status()
-        # 关键修复：使用 io.BytesIO 包装二进制数据
         image = Image.open(io.BytesIO(response.content)).convert('RGB')
         return image
 
@@ -169,7 +169,6 @@ class ImageProcessor:
         """使用AutoDL本地Qwen2.5-VL模型处理图像"""
         import torch
 
-        # 加载图像
         if image_path.startswith('http://') or image_path.startswith('https://'):
             image = self._load_image_from_url(image_path)
         else:
@@ -209,7 +208,6 @@ class ImageProcessor:
                 top_p=None,
             )
 
-        # 去除输入部分
         input_ids = inputs.get("input_ids")
         if input_ids is not None:
             output_ids = output_ids[:, input_ids.size(1):]
@@ -222,7 +220,6 @@ class ImageProcessor:
 
     def _process_ollama(self, image_path: str) -> str:
         """使用本地Ollama处理图像"""
-        # 加载图像为base64
         if image_path.startswith('http://') or image_path.startswith('https://'):
             image = self._load_image_from_url(image_path)
             img_byte_arr = io.BytesIO()
@@ -365,31 +362,98 @@ class ImageProcessor:
         return result["choices"][0]["message"]["content"]
 
     def _parse_response(self, content: str) -> tuple:
-        """解析响应，提取名词和形容词"""
+        """解析响应，提取名词和形容词（增强容错）"""
         try:
             content = content.strip()
 
+            # 清理 markdown 格式
             if "```json" in content:
                 content = content.split("```json")[1].split("```")[0]
             elif "```" in content:
                 content = content.split("```")[1].split("```")[0]
 
+            # 提取 JSON 部分
             start = content.find('{')
             end = content.rfind('}')
             if start != -1 and end != -1:
                 content = content[start:end+1]
 
-            result = json.loads(content.strip())
+            # 尝试解析 JSON
+            try:
+                result = json.loads(content.strip())
+            except json.JSONDecodeError as e:
+                # JSON 不完整，尝试修复
+                print(f"JSON不完整，尝试修复...")
+                content = self._fix_incomplete_json(content)
+                result = json.loads(content)
 
             nouns = result.get("nouns", [])
             adjectives = result.get("adjectives", [])
 
             return nouns, adjectives
 
-        except json.JSONDecodeError as e:
+        except Exception as e:
             print(f"JSON解析失败: {e}")
-            print(f"原始响应（前200字符）: {content[:200]}")
-            return [], []
+            print(f"原始响应: {content[:500]}")
+            # 尝试正则提取
+            return self._extract_with_regex(content)
+
+    def _fix_incomplete_json(self, content: str) -> str:
+        """修复不完整的 JSON"""
+        # 移除尾部不完整的内容
+        content = content.strip()
+
+        # 找到最后一个完整的元素
+        last_bracket = content.rfind(']')
+        last_brace = content.rfind('}')
+
+        if last_bracket > last_brace:
+            # 数组先结束
+            content = content[:last_bracket+1]
+            # 补全对象
+            if content.rfind('"adjectives"') > content.rfind('"nouns"'):
+                content = content + "}"
+            else:
+                content = content + ', "adjectives": []}'
+        else:
+            # 对象结束
+            content = content[:last_brace+1]
+
+        # 确保有开头的 {
+        if not content.startswith('{'):
+            content = '{' + content
+
+        # 确保有结尾的 }
+        if not content.endswith('}'):
+            content = content + '}'
+
+        return content
+
+    def _extract_with_regex(self, content: str) -> tuple:
+        """使用正则表达式提取名词和形容词"""
+        nouns = []
+        adjectives = []
+
+        try:
+            # 提取 nouns 数组
+            nouns_match = re.search(r'"nouns"\s*:\s*\[(.*?)\]', content, re.DOTALL)
+            if nouns_match:
+                nouns_str = nouns_match.group(1)
+                # 提取引号中的字符串
+                nouns = re.findall(r'"([^"]*)"', nouns_str)
+
+            # 提取 adjectives 数组
+            adjectives_match = re.search(r'"adjectives"\s*:\s*\[(.*?)\]', content, re.DOTALL)
+            if adjectives_match:
+                adjectives_str = adjectives_match.group(1)
+                adjectives = re.findall(r'"([^"]*)"', adjectives_str)
+
+            print(f"使用正则提取成功: {len(nouns)} 个名词, {len(adjectives)} 个形容词")
+
+        except Exception as e:
+            print(f"正则提取也失败: {e}")
+
+        return nouns, adjectives
 
 
 def test():
