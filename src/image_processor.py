@@ -100,51 +100,60 @@ class ImageProcessor:
         # 先清理显存
         if device == "cuda":
             torch.cuda.empty_cache()
-            print(f"当前显存使用: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+            print(f"加载前显存: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
 
-        self.processor = AutoProcessor.from_pretrained(
-            self.local_model_path,
-            trust_remote_code=True
-        )
-
+        # 方案1：使用 8-bit 量化加载（最省显存）
         if device == "cuda":
-            # 先尝试正常加载（你的 24GB 显存应该够）
+            print("使用 8-bit 量化加载...")
             try:
-                print("尝试使用 bfloat16 加载...")
+                quantization_config = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                    llm_int8_threshold=6.0,
+                )
                 torch.cuda.empty_cache()
                 self.model = AutoModelForVision2Seq.from_pretrained(
                     self.local_model_path,
-                    torch_dtype=torch.bfloat16,
+                    quantization_config=quantization_config,
                     device_map="auto",
+                    trust_remote_code=True,
+                    low_cpu_mem_usage=True,  # 减少 CPU 内存占用
+                )
+                print(f"加载后显存: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+                
+                # 加载 processor（较轻量）
+                self.processor = AutoProcessor.from_pretrained(
+                    self.local_model_path,
                     trust_remote_code=True
                 )
-                print("bfloat16 加载成功!")
-            except RuntimeError as e:
-                if "out of memory" in str(e).lower():
-                    print("显存不足，尝试 8-bit 量化...")
-                    torch.cuda.empty_cache()
-                    quantization_config = BitsAndBytesConfig(
-                        load_in_8bit=True,
-                        llm_int8_threshold=6.0,
-                    )
-                    self.model = AutoModelForVision2Seq.from_pretrained(
-                        self.local_model_path,
-                        quantization_config=quantization_config,
-                        device_map="auto",
-                        trust_remote_code=True
-                    )
-                    print("8-bit 量化加载成功!")
-                else:
-                    raise
+                print("模型 + 8-bit 量化 加载完成")
+            except Exception as e:
+                print(f"8-bit 量化失败: {e}")
+                print("尝试 CPU 模式...")
+                self.model = AutoModelForVision2Seq.from_pretrained(
+                    self.local_model_path,
+                    torch_dtype=torch.float32,
+                    device_map="cpu",
+                    trust_remote_code=True,
+                    low_cpu_mem_usage=True,
+                )
+                self.processor = AutoProcessor.from_pretrained(
+                    self.local_model_path,
+                    trust_remote_code=True
+                )
+                print("CPU 模式加载完成")
         else:
+            # CPU 模式
+            self.processor = AutoProcessor.from_pretrained(
+                self.local_model_path,
+                trust_remote_code=True
+            )
             self.model = AutoModelForVision2Seq.from_pretrained(
                 self.local_model_path,
                 torch_dtype=torch.float32,
                 device_map="cpu",
                 trust_remote_code=True
             )
-
-        print("AutoDL Qwen2.5-VL 模型加载完成")
+            print("AutoDL Qwen2.5-VL 模型加载完成")
 
     def _warmup(self):
         """预热模型，加速第一次推理"""
