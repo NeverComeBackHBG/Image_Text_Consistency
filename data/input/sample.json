@@ -1,0 +1,27 @@
+[
+  {
+    "id": "001",
+    "text": "这家酒店位于繁华的市中心，装修豪华，服务周到，房间干净整洁",
+    "image": "https://via.placeholder.com/400x300.jpg"
+  },
+  {
+    "id": "002",
+    "text": "风景优美的古镇，蓝天白云，古色古香的建筑，小桥流水",
+    "image": "https://via.placeholder.com/400x300.jpg"
+  },
+  {
+    "id": "003",
+    "text": "海鲜新鲜美味，价格实惠，环境优雅，服务热情",
+    "image": "https://via.placeholder.com/400x300.jpg"
+  },
+  {
+    "id": "004",
+    "text": "登高望远，山峰巍峨，云海翻滚，气势磅礴",
+    "image": "https://via.placeholder.com/400x300.jpg"
+  },
+  {
+    "id": "005",
+    "text": "美食街热闹非凡，各色小吃琳琅满目，香气扑鼻",
+    "image": "https://via.placeholder.com/400x300.jpg"
+  }
+]

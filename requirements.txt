@@ -1,0 +1,19 @@
+# 图文相似度分析项目依赖
+
+# 基础依赖
+PyYAML>=6.0
+requests>=2.28.0
+numpy>=1.24.0
+pillow>=9.0.0
+
+# HanLP - 中文NLP（分词、词性标注）
+hanlp>=2.0.0
+
+# BGE-M3 - 文本向量化
+FlagEmbedding>=1.2.0
+
+# 可选：Ollama本地运行（如果使用本地模型）
+# ollama>=0.1.0
+
+# 可选：OpenRouter API（如果使用云端API）
+# openai>=1.0.0
