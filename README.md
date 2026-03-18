@@ -6,8 +6,6 @@
 - **名词相似度**：文本与图像中名词的语义相似度
 - **形容词相似度**：文本与图像中形容词的语义相似度
 
-该方法参考学术论文中的图文融合特征表征方法，通过向量工程对图文内容进行多维度量化。
-
 ## 技术架构
 
 ```
@@ -21,7 +19,7 @@
 ┌───────────────────┐                     ┌───────────────────┐
 │   文本处理模块     │                     │   图像处理模块     │
 │  - HanLP分词      │                     │  - Qwen2.5-VL     │
-│  - 提取名词/形容词 │                     │  - 提取名词/形容词  │
+│  - 提取名词/形容词 │                     │  - Ollama本地运行  │
 └───────────────────┘                     └───────────────────┘
         │                                           │
         └─────────────────────┬─────────────────────┘
@@ -42,80 +40,53 @@
 ## 环境要求
 
 - Python 3.8+
-- 推荐使用 GPU 服务器（RTX 3090/4090）
-- 或使用 AutoDL + Ollama 镜像
+- GPU 服务器（RTX 3090/4090）
+- **AutoDL社区镜像（已预装Ollama + Qwen2.5-VL）**
 
 ## 快速开始
 
-### 方式一：AutoDL云端部署（推荐）
+### 1. 租用AutoDL服务器
 
-1. **租用服务器**：选择 RTX 4090/3090 + PyTorch官方镜像
-2. **克隆项目**：
-   ```bash
-   git clone https://github.com/你的仓库名/Image_Text_Consistency.git
-   cd Image_Text_Consistency
-   ```
-3. **一键安装**：
-   ```bash
-   bash install.sh
-   ```
-4. **运行**：
-   ```bash
-   python main.py --input data/input/你的数据.json --output data/output/result.json
-   ```
+1. 选择 **社区镜像**（已预装Ollama和Qwen2.5-VL）
+2. 选择 GPU：RTX 4090 / 3090
 
-### 方式二：本地安装
-
-### 1. 安装依赖
+### 2. 克隆并安装
 
 ```bash
+# 克隆项目
+git clone https://github.com/你的仓库名/Image_Text_Consistency.git
+cd Image_Text_Consistency
+
+# 安装依赖
 pip install -r requirements.txt
+
+# 确认Ollama可用
+ollama list
 ```
-
-### 2. 配置
-
-项目默认使用 **Ollama 本地模型**，配置已默认设置好。
-
-如需使用其他方式，编辑 `config/config.yaml`。
 
 ### 3. 准备数据
 
-创建输入JSON文件，格式如下：
+将JSON数据文件上传到 `data/input/` 目录
+
+### 4. 运行
+
+```bash
+python main.py --input data/input/你的数据.json --output data/output/result.json
+```
+
+## 输入数据格式
 
 ```json
 [
   {
     "id": "001",
-    "text": "这家酒店位于繁华的市中心，装修豪华，服务周到",
+    "text": "这家酒店位于繁华的市中心，装修豪华",
     "image": "https://example.com/hotel.jpg"
-  },
-  {
-    "id": "002",
-    "text": "风景优美的古镇，蓝天白云，古色古香的建筑",
-    "image": "https://example.com/town.jpg"
   }
 ]
 ```
 
-### 4. 运行
-
-```bash
-# 单条测试
-python run_single.py
-
-# 批量处理
-python main.py --input data/input/your_data.json --output data/output/result.json
-```
-
-## 输入数据格式说明
-
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `id` | ✅ | 数据唯一标识 |
-| `text` | ✅ | 笔记正文内容 |
-| `image` | ✅ | 图片URL或本地路径 |
-
-## 输出结果格式
+## 输出结果
 
 ```json
 {
@@ -123,43 +94,34 @@ python main.py --input data/input/your_data.json --output data/output/result.jso
   "success": true,
   "noun_similarity": 0.8235,
   "adjective_similarity": 0.7562,
-  "average_similarity": 0.7899,
-  "processing_time": 5.23,
-  "details": {
-    "text_nouns": ["市中心", "装修", "服务", "房间"],
-    "text_adjectives": ["繁华", "豪华", "周到", "干净"],
-    "image_nouns": ["酒店", "大堂", "房间", "床"],
-    "image_adjectives": ["豪华", "舒适", "干净", "明亮"]
-  }
+  "average_similarity": 0.7899
 }
 ```
 
-## 模块说明
+## 模型说明
 
-| 模块 | 文件 | 功能 |
-|------|------|------|
-| 文本处理 | `src/text_processor.py` | HanLP词法分析，提取名词/形容词 |
-| 图像处理 | `src/image_processor.py` | Qwen2.5-VL提取图像词项 |
-| 向量化 | `src/vectorizer.py` | BGE-M3文本向量化 |
-| 相似度 | `src/similarity.py` | 余弦相似度计算 |
-| 流程 | `src/pipeline.py` | 整合全流程处理 |
+| 模型 | 用途 | 首次运行 |
+|------|------|----------|
+| HanLP | 文本分词、词性标注 | 自动下载 |
+| BGE-M3 | 文本向量化 | 自动下载 |
+| Qwen2.5-VL | 图像语义提取 | 社区镜像已预装 |
 
-## 云端部署
+## 故障排查
 
-详见 [DEPLOY.md](DEPLOY.md)
+### Ollama连接失败
+```bash
+# 启动Ollama服务
+ollama serve &
 
-推荐使用 **AutoDL + Ollama镜像**，无需手动下载模型，开箱即用。
+# 查看可用模型
+ollama list
+```
 
-## 常见问题
-
-**Q: 模型太大，显存不够怎么办？**
-A: 使用更小的模型 `qwen2.5-vl:3b-instruct`，或使用AutoDL的24GB显存服务器
-
-**Q: 首次运行很慢？**
-A: 首次运行需要下载模型（HanLP、BGE-M3），请耐心等待
-
-**Q: 图片加载失败？**
-A: 检查图片URL是否可访问，或使用本地图片路径
+### 模型未找到
+```bash
+# 下载模型
+ollama pull qwen2.5-vl:7b-instruct
+```
 
 ## License
 

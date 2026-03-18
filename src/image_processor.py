@@ -1,22 +1,19 @@
 """
 图像处理模块
 使用Qwen2.5-VL生成图像的关键词项（名词+形容词）
-支持Ollama本地运行和OpenRouter云端API
+支持Ollama本地运行和HuggingFace
 """
 
-import base64
 import json
 import os
-import requests
 from typing import Dict, List, Optional
 from PIL import Image
-import io
+import requests
 
 
 class ImageProcessor:
     """图像处理器 - 提取图像中的名词和形容词"""
 
-    # 默认prompt，指导模型输出格式
     DEFAULT_PROMPT = """请分析这张图片，提取：
 1. 图像中出现的所有实体/对象（名词），如天空、城市、人物、物品等
 2. 描述这些实体/场景的氛围和特征的词（形容词），如美丽、拥挤、安静、热闹等
@@ -34,64 +31,107 @@ class ImageProcessor:
         provider: str = "ollama",
         model: str = "qwen2.5-vl:7b-instruct",
         base_url: str = "http://localhost:11434",
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        cache_dir: str = "./models"
     ):
         """
         初始化图像处理器
 
         Args:
-            provider: "ollama"（本地）或 "openrouter"（云端API）
+            provider: "ollama"（本地）、"huggingface"（本地）、"openrouter"（云端）
             model: 模型名称
             base_url: API地址
             api_key: API密钥
+            cache_dir: 模型缓存目录
         """
         self.provider = provider
-        self.model = model
+        self.model_name = model
         self.base_url = base_url
+        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
+        self.cache_dir = cache_dir
+        self._loaded = False
 
-        # 优先使用环境变量中的API Key
-        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    def load(self):
+        """加载模型（Ollama不需要预加载）"""
+        if self._loaded:
+            return
 
-        if not self.api_key and provider == "openrouter":
-            print("警告: 未设置OPENROUTER_API_KEY环境变量，云端API可能无法使用")
+        print(f"视觉模型配置: {self.provider} - {self.model_name}")
 
-    def load_image(self, image_path: str) -> str:
-        """
-        加载图像并转换为base64
+        if self.provider == "huggingface":
+            self._load_huggingface_model()
 
-        Args:
-            image_path: 图像文件路径或URL
+        self._loaded = True
+        print("视觉模型就绪")
 
-        Returns:
-            base64编码的图像字符串
-        """
-        # 支持URL和本地路径
+    def _load_huggingface_model(self):
+        """从HuggingFace加载模型"""
+        from transformers import AutoProcessor, AutoModelForVision2Seq
+        import torch
+
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+        self.processor = AutoProcessor.from_pretrained(
+            self.model_name,
+            cache_dir=self.cache_dir
+        )
+
+        self.model = AutoModelForVision2Seq.from_pretrained(
+            self.model_name,
+            torch_dtype=torch.float16,
+            device_map="auto",
+            cache_dir=self.cache_dir
+        )
+
+    def process(self, image_path: str) -> Dict[str, any]:
+        """处理图像，提取名词和形容词"""
+        print(f"正在处理图像: {image_path}")
+
+        if not self._loaded:
+            self.load()
+
+        try:
+            if self.provider == "ollama":
+                content = self._process_ollama(image_path)
+            elif self.provider == "huggingface":
+                content = self._process_huggingface(image_path)
+            elif self.provider == "openrouter":
+                content = self._process_openrouter(image_path)
+            else:
+                raise ValueError(f"不支持的provider: {self.provider}")
+
+            nouns, adjectives = self._parse_response(content)
+
+        except Exception as e:
+            print(f"图像处理失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            nouns = []
+            adjectives = []
+
+        return {
+            "nouns": nouns,
+            "adjectives": adjectives,
+            "noun_string": " ".join(nouns),
+            "adjective_string": " ".join(adjectives),
+            "raw_response": content if 'content' in dir() else ""
+        }
+
+    def _process_ollama(self, image_path: str) -> str:
+        """使用本地Ollama处理图像"""
+        import base64
+
+        # 加载图像为base64
         if image_path.startswith('http://') or image_path.startswith('https://'):
-            # 下载网络图片
             response = requests.get(image_path, timeout=30)
             response.raise_for_status()
-            image = Image.open(io.BytesIO(response.content))
+            img_bytes = response.content
         else:
-            # 读取本地图片
-            if not os.path.exists(image_path):
-                raise FileNotFoundError(f"图片文件不存在: {image_path}")
-            image = Image.open(image_path)
+            with open(image_path, 'rb') as f:
+                img_bytes = f.read()
 
-        # 转换为base64
-        buffered = io.BytesIO()
-        # 统一转为RGB模式
-        if image.mode in ('RGBA', 'P'):
-            image = image.convert('RGB')
-        image.save(buffered, format="JPEG", quality=85)
-        img_str = base64.b64encode(buffered.getvalue()).decode()
+        img_str = base64.b64encode(img_bytes).decode()
 
-        return img_str
-
-    def _call_api(self, image_path: str) -> str:
-        """调用视觉模型API"""
-        img_str = self.load_image(image_path)
-
-        # 构建消息
         messages = [
             {
                 "role": "user",
@@ -107,19 +147,10 @@ class ImageProcessor:
             }
         ]
 
-        if self.provider == "ollama":
-            return self._call_ollama(messages)
-        elif self.provider == "openrouter":
-            return self._call_openrouter(messages)
-        else:
-            raise ValueError(f"不支持的provider: {self.provider}")
-
-    def _call_ollama(self, messages: List) -> str:
-        """调用本地Ollama API"""
         response = requests.post(
             f"{self.base_url}/api/chat",
             json={
-                "model": self.model,
+                "model": self.model_name,
                 "messages": messages,
                 "stream": False
             },
@@ -132,15 +163,87 @@ class ImageProcessor:
         result = response.json()
         return result["message"]["content"]
 
-    def _call_openrouter(self, messages: List) -> str:
-        """调用OpenRouter API（云端）"""
+    def _process_huggingface(self, image_path: str) -> str:
+        """使用HuggingFace模型处理图像"""
+        from qwen_vl_utils import process_vision_info
+        import torch
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image_path},
+                    {"type": "text", "text": self.DEFAULT_PROMPT}
+                ]
+            }
+        ]
+
+        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        image_inputs, _ = process_vision_info(messages)
+
+        inputs = self.processor(
+            text=[text],
+            images=image_inputs,
+            return_tensors="pt",
+            padding=True
+        )
+        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=512,
+                do_sample=False
+            )
+
+        generated_ids = [
+            output_ids[len(input_ids):]
+            for input_ids, output_ids in zip(inputs['input_ids'], output_ids)
+        ]
+        output_text = self.processor.batch_decode(
+            generated_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=True
+        )[0]
+
+        return output_text
+
+    def _process_openrouter(self, image_path: str) -> str:
+        """使用OpenRouter API处理图像"""
+        import base64
+
+        if image_path.startswith('http://') or image_path.startswith('https://'):
+            response = requests.get(image_path, timeout=30)
+            response.raise_for_status()
+            img_bytes = response.content
+        else:
+            with open(image_path, 'rb') as f:
+                img_bytes = f.read()
+
+        img_str = base64.b64encode(img_bytes).decode()
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": self.DEFAULT_PROMPT},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{img_str}"
+                        }
+                    }
+                ]
+            }
+        ]
+
         if not self.api_key:
             raise ValueError("OpenRouter需要设置API Key")
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com",  # OpenRouter需要
+            "HTTP-Referer": "https://github.com",
             "X-Title": "ImageTextSimilarity"
         }
 
@@ -148,7 +251,7 @@ class ImageProcessor:
             f"{self.base_url}/chat/completions",
             headers=headers,
             json={
-                "model": self.model,
+                "model": self.model_name,
                 "messages": messages
             },
             timeout=120
@@ -160,57 +263,16 @@ class ImageProcessor:
         result = response.json()
         return result["choices"][0]["message"]["content"]
 
-    def process(self, image_path: str) -> Dict[str, any]:
-        """
-        处理图像，提取名词和形容词
-
-        Args:
-            image_path: 图像路径（本地路径或URL）
-
-        Returns:
-            {
-                "nouns": [...],
-                "adjectives": [...],
-                "noun_string": "...",
-                "adjective_string": "..."
-            }
-        """
-        print(f"正在处理图像: {image_path}")
-
+    def _parse_response(self, content: str) -> tuple:
+        """解析响应，提取名词和形容词"""
         try:
-            # 调用API
-            content = self._call_api(image_path)
-
-            # 解析JSON响应
-            nouns, adjectives = self._parse_response(content)
-
-        except Exception as e:
-            print(f"图像处理失败: {str(e)}")
-            nouns = []
-            adjectives = []
-
-        return {
-            "nouns": nouns,
-            "adjectives": adjectives,
-            "noun_string": " ".join(nouns),
-            "adjective_string": " ".join(adjectives),
-            "raw_response": content if 'content' in dir() else ""
-        }
-
-    def _parse_response(self, content: str) -> Tuple[List[str], List[str]]:
-        """解析API响应，提取名词和形容词列表"""
-        try:
-            # 清理响应内容，提取JSON
             content = content.strip()
 
-            # 处理可能的markdown代码块
             if "```json" in content:
                 content = content.split("```json")[1].split("```")[0]
             elif "```" in content:
                 content = content.split("```")[1].split("```")[0]
 
-            # 尝试提取JSON对象
-            # 找到第一个{和最后一个}
             start = content.find('{')
             end = content.rfind('}')
             if start != -1 and end != -1:
@@ -231,23 +293,12 @@ class ImageProcessor:
 
 def test():
     """测试函数"""
-    # 测试配置 - 使用OpenRouter
     processor = ImageProcessor(
-        provider="openrouter",
-        model="qwen/qwen2.5-vl-7b-instruct"
+        provider="ollama",
+        model="qwen2.5-vl:7b-instruct"
     )
-
-    # 检查API Key
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if api_key:
-        print(f"API Key已设置: {api_key[:10]}...")
-    else:
-        print("警告: 请设置OPENROUTER_API_KEY环境变量")
-
-    # 测试解析功能
-    test_json = '{"nouns": ["天空", "城市", "建筑"], "adjectives": ["美丽", "繁华"]}'
-    nouns, adjectives = processor._parse_response(test_json)
-    print(f"\n解析测试: 名词={nouns}, 形容词={adjectives}")
+    print("图像处理器初始化完成")
+    print(f"将使用 Ollama: {processor.model_name}")
 
 
 if __name__ == "__main__":

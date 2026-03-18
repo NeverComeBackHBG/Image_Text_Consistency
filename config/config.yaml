@@ -10,54 +10,45 @@ models:
 
   # 视觉模型配置
   vision:
-    # 提供商：ollama（本地/Ollama镜像）
+    # 提供商：ollama（本地，社区镜像已安装）
     provider: "ollama"
 
-    # 模型名称（Ollama可用）
-    #   - qwen2.5-vl:7b-instruct   (推荐，需要24GB显存)
-    #   - qwen2.5-vl:3b-instruct   (较省显存，需要12GB)
-    #   - llava:7b                 (备选)
+    # 模型名称（社区镜像可能已预装）
+    # 可以先运行 ollama list 查看可用模型
+    #   - qwen2.5-vl:7b-instruct
+    #   - qwen2.5-vl:3b-instruct
+    #   - llava:7b
     model: "qwen2.5-vl:7b-instruct"
 
-    # Ollama本地地址
+    # Ollama API地址
     base_url: "http://localhost:11434"
 
-    # 如果使用OpenRouter云端API（可选）:
+    # 如果使用HuggingFace本地模型：
+    # provider: "huggingface"
+    # model: "Qwen/Qwen2-VL-7B-Instruct"
+    # cache_dir: "./models"
+
+    # 如果使用OpenRouter云端API：
     # provider: "openrouter"
     # model: "qwen/qwen2.5-vl-7b-instruct"
-    # base_url: "https://openrouter.ai/api/v1"
     # api_key: "${OPENROUTER_API_KEY}"
 
 # HanLP配置
 hanlp:
-  # 预训练模型：standard（标准）、large（大容量）
   pretrained: "standard"
-  # 模型缓存目录
   cache_dir: "./models/hanlp"
 
 # BGE-M3配置
 bge:
-  # 模型缓存目录
   cache_dir: "./models/bge"
 
 # 处理配置
 processing:
   batch_size: 1
-  timeout: 120  # 单条处理超时时间（秒）
-
-# 图像处理配置
-image:
-  max_size: 1024  # 图像最大边长
-  cache_dir: "./models"
+  timeout: 120
 
 # 输出配置
 output:
-  format: "json"  # json 或 csv
-  include_details: true  # 是否包含详细信息（名词/形容词列表）
-
-# ========================================
-# 环境变量（可选）
-# ========================================
-# 如果使用OpenRouter云端API，需要设置：
-#   Linux/Mac: export OPENROUTER_API_KEY=your-key
-#   Windows: set OPENROUTER_API_KEY=your-key
+  dir: "data/output"
+  format: "json"
+  include_details: true

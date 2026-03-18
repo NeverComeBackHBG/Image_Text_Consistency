@@ -53,11 +53,14 @@ class Pipeline:
 
         # 图像处理器
         vision_config = self.config['models']['vision']
+        vision_cache = vision_config.get('cache_dir', './models')
+
         self.image_processor = ImageProcessor(
             provider=vision_config['provider'],
             model=vision_config['model'],
             base_url=vision_config.get('base_url', 'http://localhost:11434'),
-            api_key=vision_config.get('api_key')
+            api_key=vision_config.get('api_key'),
+            cache_dir=vision_cache
         )
 
         # 向量化器

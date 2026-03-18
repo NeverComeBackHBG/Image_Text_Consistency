@@ -12,8 +12,11 @@ hanlp>=2.0.0
 # BGE-M3 - 文本向量化
 FlagEmbedding>=1.2.0
 
-# 可选：Ollama本地运行（如果使用本地模型）
-# ollama>=0.1.0
+# Qwen2.5-VL - 图像处理（直接从HuggingFace下载）
+torch>=2.0.0
+transformers>=4.40.0
+qwen-vl-utils>=0.0.2
+accelerate>=0.25.0
 
-# 可选：OpenRouter API（如果使用云端API）
-# openai>=1.0.0
+# 可选：阿里云dashscope（如果使用API方式）
+# dashscope>=1.14.0
