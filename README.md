@@ -1,127 +1,170 @@
-# 图文相似度分析项目
+# 图文一致性分析 (Image-Text Consistency Analysis)
 
-## 项目简介
+分析文本描述与图像内容的一致性程度。
 
-本项目用于分析图文内容的语义相似度，输出两个核心变量：
-- **名词相似度**：文本与图像中名词的语义相似度
-- **形容词相似度**：文本与图像中形容词的语义相似度
+## 功能
 
-## 技术架构
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                      输入数据                            │
-│  (笔记文本 + 图片URL/本地路径)                           │
-└─────────────────────────────────────────────────────────┘
-                              │
-        ┌─────────────────────┴─────────────────────┐
-        ▼                                           ▼
-┌───────────────────┐                     ┌───────────────────┐
-│   文本处理模块     │                     │   图像处理模块     │
-│  - HanLP分词      │                     │  - Qwen2.5-VL     │
-│  - 提取名词/形容词 │                     │  - Ollama本地运行  │
-└───────────────────┘                     └───────────────────┘
-        │                                           │
-        └─────────────────────┬─────────────────────┘
-                              ▼
-              ┌───────────────────────────────┐
-              │         向量化与相似度计算       │
-              │  - BGE-M3 文本向量化            │
-              │  - 余弦相似度                   │
-              └───────────────────────────────┘
-                              │
-                              ▼
-              ┌───────────────────────────────┐
-              │          输出结果              │
-              │  名词相似度 + 形容词相似度      │
-              └───────────────────────────────┘
-```
+- 使用 **Qwen2.5-VL** 理解图像内容
+- 使用 **BGE-M3** 进行文本向量化
+- 计算图文相似度（名词 + 形容词）
+- 支持 GPU 加速
 
 ## 环境要求
 
-- Python 3.8+
-- GPU 服务器（RTX 3090/4090）
-- **AutoDL社区镜像（已预装Ollama + Qwen2.5-VL）**
+- Python 3.9+
+- CUDA 12.1+
+- GPU 显存 ≥ 16GB（推荐 24GB）
+- 硬盘空间 ≥ 30GB（模型缓存）
 
 ## 快速开始
 
-### 1. 租用AutoDL服务器
-
-1. 选择 **社区镜像**（已预装Ollama和Qwen2.5-VL）
-2. 选择 GPU：RTX 4090 / 3090
-
-### 2. 克隆并安装
+### 1. 安装依赖
 
 ```bash
-# 克隆项目
-git clone https://github.com/你的仓库名/Image_Text_Consistency.git
-cd Image_Text_Consistency
-
-# 安装依赖
+# 方式一：直接安装
 pip install -r requirements.txt
 
-# 确认Ollama可用
-ollama list
+# 方式二：运行环境搭建脚本
+python setup_environment.py
 ```
 
-### 3. 准备数据
+### 2. 下载模型
 
-将JSON数据文件上传到 `data/input/` 目录
+模型会自动下载到 `./models` 目录（首次运行时）。
 
-### 4. 运行
+如需手动下载：
+```bash
+# Qwen2.5-VL-7B
+huggingface-cli download Qwen/Qwen2.5-VL-7B-Instruct
+
+# BGE-M3
+huggingface-cli download BAAI/bge-m3
+```
+
+### 3. 运行 Demo
 
 ```bash
-python main.py --input data/input/你的数据.json --output data/output/result.json
+# JupyterLab
+jupyter lab demo.ipynb
 ```
 
-## 输入数据格式
+### 4. 配置国内镜像（推荐）
 
-```json
-[
-  {
-    "id": "001",
-    "text": "这家酒店位于繁华的市中心，装修豪华",
-    "image": "https://example.com/hotel.jpg"
-  }
-]
-```
+首次运行前设置环境变量：
 
-## 输出结果
-
-```json
-{
-  "id": "001",
-  "success": true,
-  "noun_similarity": 0.8235,
-  "adjective_similarity": 0.7562,
-  "average_similarity": 0.7899
-}
-```
-
-## 模型说明
-
-| 模型 | 用途 | 首次运行 |
-|------|------|----------|
-| HanLP | 文本分词、词性标注 | 自动下载 |
-| BGE-M3 | 文本向量化 | 自动下载 |
-| Qwen2.5-VL | 图像语义提取 | 社区镜像已预装 |
-
-## 故障排查
-
-### Ollama连接失败
 ```bash
-# 启动Ollama服务
-ollama serve &
-
-# 查看可用模型
-ollama list
+export HF_ENDPOINT=https://hf-mirror.com
+export HF_HUB_ENABLE_HF_TRANSFER=1
 ```
 
-### 模型未找到
+## 使用方法
+
+### Python API
+
+```python
+from src.pipeline import ImageTextPipeline
+
+# 创建 Pipeline
+pipeline = ImageTextPipeline(
+    provider="huggingface",  # 使用 HuggingFace 模型
+    cache_dir="./models"
+)
+
+# 分析图文一致性
+result = pipeline.analyze(
+    text="酒店位于市中心，装修豪华",
+    image_path="https://example.com/hotel.jpg"
+)
+
+print(f"相似度: {result['average_similarity']:.4f}")
+```
+
+### 命令行
+
 ```bash
-# 下载模型
-ollama pull qwen2.5-vl:7b-instruct
+python run.py --text "酒店位于市中心" --image_path "./test.jpg"
 ```
+
+## 参数说明
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| provider | 模型来源 | "huggingface" |
+| cache_dir | 模型缓存目录 | "./models" |
+| use_quantization | 是否使用量化 | True |
+| quantization_bits | 量化位数 (4/8) | 8 |
+
+### Provider 选项
+
+- `huggingface`: 从 HuggingFace 下载模型（推荐）
+- `ollama`: 使用本地 Ollama 服务
+- `openrouter`: 使用 OpenRouter API（需 API Key）
+
+## 项目结构
+
+```
+Image_Text_Consistency/
+├── src/
+│   ├── image_processor.py   # 图像处理（Qwen2.5-VL）
+│   ├── text_processor.py   # 文本处理（jieba）
+│   ├── vectorizer.py       # 向量化（BGE-M3）
+│   ├── similarity.py       # 相似度计算
+│   └── pipeline.py         # 完整流程
+├── config/
+│   └── config.yaml         # 配置文件
+├── data/
+│   ├── input/              # 输入数据
+│   └── output/             # 输出结果
+├── models/                 # 模型缓存
+├── demo.ipynb              # Jupyter Demo
+├── run.py                  # 命令行入口
+├── requirements.txt        # 依赖清单
+└── setup_environment.py   # 环境搭建脚本
+```
+
+## 显存优化
+
+如遇显存不足：
+
+1. **使用 8-bit 量化**（默认）
+```python
+pipeline = ImageTextPipeline(use_quantization=True, quantization_bits=8)
+```
+
+2. **使用 4-bit 量化**（更省显存）
+```python
+pipeline = ImageTextPipeline(use_quantization=True, quantization_bits=4)
+```
+
+3. **关闭量化**（需要更多显存）
+```python
+pipeline = ImageTextPipeline(use_quantization=False)
+```
+
+4. **处理完后清理显存**
+```python
+import torch
+torch.cuda.empty_cache()
+```
+
+## 常见问题
+
+### Q: 模型下载很慢
+A: 设置国内镜像：
+```python
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+```
+
+### Q: 显存不足
+A: 
+- 使用量化模式（默认已开启）
+- 减少 batch_size
+- 清理其他占用显存的进程
+
+### Q: 图像加载失败
+A: 
+- 检查 URL 是否可访问
+- 尝试下载到本地后使用本地路径
 
 ## License
 
