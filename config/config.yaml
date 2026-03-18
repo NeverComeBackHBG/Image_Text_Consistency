@@ -10,14 +10,18 @@ models:
 
   # 视觉模型配置
   vision:
-    # 提供商：ollama（本地，社区镜像已安装）
-    provider: "ollama"
+    # 提供商选择：
+    # - "autodl": AutoDL社区镜像预装模型（推荐， fastest）
+    # - "ollama": 本地Ollama服务
+    # - "huggingface": HuggingFace本地模型
+    # - "openrouter": 云端API
+    provider: "autodl"
 
-    # 模型名称（社区镜像可能已预装）
-    # 可以先运行 ollama list 查看可用模型
-    #   - qwen2.5-vl:7b-instruct
-    #   - qwen2.5-vl:3b-instruct
-    #   - llava:7b
+    # AutoDL社区镜像预装模型路径
+    # 镜像: Qwen2.5-VL-7B-Instruct
+    local_model_path: "/root/models/Qwen2.5-VL-7B-Instruct"
+
+    # Ollama 模型名称（如使用ollama）
     model: "qwen2.5-vl:7b-instruct"
 
     # Ollama API地址

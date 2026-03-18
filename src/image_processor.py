@@ -1,7 +1,7 @@
 """
 图像处理模块
 使用Qwen2.5-VL生成图像的关键词项（名词+形容词）
-支持Ollama本地运行和HuggingFace
+支持四种方式：AutoDL（推荐）、Ollama、HuggingFace、OpenRouter API
 """
 
 import json
@@ -9,6 +9,7 @@ import os
 from typing import Dict, List, Optional
 from PIL import Image
 import requests
+import base64
 
 
 class ImageProcessor:
@@ -28,41 +29,72 @@ class ImageProcessor:
 
     def __init__(
         self,
-        provider: str = "ollama",
+        provider: str = "autodl",
         model: str = "qwen2.5-vl:7b-instruct",
         base_url: str = "http://localhost:11434",
         api_key: Optional[str] = None,
-        cache_dir: str = "./models"
+        cache_dir: str = "./models",
+        local_model_path: str = "/root/models/Qwen2.5-VL-7B-Instruct"
     ):
         """
         初始化图像处理器
 
         Args:
-            provider: "ollama"（本地）、"huggingface"（本地）、"openrouter"（云端）
+            provider: "autodl"（推荐）、"ollama"、"huggingface"、"openrouter"
             model: 模型名称
-            base_url: API地址
+            base_url: API地址（Ollama/OpenRouter用）
             api_key: API密钥
             cache_dir: 模型缓存目录
+            local_model_path: AutoDL本地模型路径
         """
         self.provider = provider
         self.model_name = model
         self.base_url = base_url
         self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
         self.cache_dir = cache_dir
+        self.local_model_path = local_model_path
         self._loaded = False
 
     def load(self):
-        """加载模型（Ollama不需要预加载）"""
+        """加载模型"""
         if self._loaded:
             return
 
         print(f"视觉模型配置: {self.provider} - {self.model_name}")
 
-        if self.provider == "huggingface":
+        if self.provider == "autodl":
+            self._load_autodl_model()
+        elif self.provider == "huggingface":
             self._load_huggingface_model()
 
         self._loaded = True
         print("视觉模型就绪")
+
+    def _load_autodl_model(self):
+        """从AutoDL社区镜像加载本地Qwen2.5-VL模型"""
+        import torch
+        from transformers import AutoProcessor, AutoModelForVision2Seq
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"正在加载 AutoDL 本地模型: {self.local_model_path}")
+        print(f"使用设备: {device}")
+
+        self.processor = AutoProcessor.from_pretrained(
+            self.local_model_path,
+            trust_remote_code=True
+        )
+
+        self.model = AutoModelForVision2Seq.from_pretrained(
+            self.local_model_path,
+            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+            device_map="auto" if device == "cuda" else "cpu",
+            trust_remote_code=True
+        )
+
+        if device == "cpu":
+            self.model = self.model.to("cpu")
+
+        print("AutoDL Qwen2.5-VL 模型加载完成")
 
     def _load_huggingface_model(self):
         """从HuggingFace加载模型"""
@@ -91,7 +123,9 @@ class ImageProcessor:
             self.load()
 
         try:
-            if self.provider == "ollama":
+            if self.provider == "autodl":
+                content = self._process_autodl(image_path)
+            elif self.provider == "ollama":
                 content = self._process_ollama(image_path)
             elif self.provider == "huggingface":
                 content = self._process_huggingface(image_path)
@@ -117,10 +151,65 @@ class ImageProcessor:
             "raw_response": content if 'content' in dir() else ""
         }
 
+    def _process_autodl(self, image_path: str) -> str:
+        """使用AutoDL本地Qwen2.5-VL模型处理图像"""
+        import torch
+
+        # 加载图像
+        if image_path.startswith('http://') or image_path.startswith('https://'):
+            response = requests.get(image_path, timeout=30)
+            response.raise_for_status()
+            image = Image.open(response.content).convert('RGB')
+        else:
+            image = Image.open(image_path).convert('RGB')
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": self.DEFAULT_PROMPT},
+                    {"type": "image", "image": image}
+                ]
+            }
+        ]
+
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+
+        inputs = self.processor(
+            text=[text],
+            images=image,
+            return_tensors="pt",
+            padding=True
+        )
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if device == "cuda":
+            inputs = {k: v.to("cuda") for k, v in inputs.items()}
+
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=512,
+                do_sample=False,
+                temperature=None,
+                top_p=None,
+            )
+
+        # 去除输入部分
+        input_ids = inputs.get("input_ids")
+        if input_ids is not None:
+            output_ids = output_ids[:, input_ids.size(1):]
+
+        output_text = self.processor.batch_decode(
+            output_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
+        )[0]
+
+        return output_text
+
     def _process_ollama(self, image_path: str) -> str:
         """使用本地Ollama处理图像"""
-        import base64
-
         # 加载图像为base64
         if image_path.startswith('http://') or image_path.startswith('https://'):
             response = requests.get(image_path, timeout=30)
@@ -210,8 +299,6 @@ class ImageProcessor:
 
     def _process_openrouter(self, image_path: str) -> str:
         """使用OpenRouter API处理图像"""
-        import base64
-
         if image_path.startswith('http://') or image_path.startswith('https://'):
             response = requests.get(image_path, timeout=30)
             response.raise_for_status()
@@ -294,11 +381,11 @@ class ImageProcessor:
 def test():
     """测试函数"""
     processor = ImageProcessor(
-        provider="ollama",
-        model="qwen2.5-vl:7b-instruct"
+        provider="autodl",
+        local_model_path="/root/models/Qwen2.5-VL-7B-Instruct"
     )
     print("图像处理器初始化完成")
-    print(f"将使用 Ollama: {processor.model_name}")
+    print(f"将使用 AutoDL 本地模型: {processor.local_model_path}")
 
 
 if __name__ == "__main__":
