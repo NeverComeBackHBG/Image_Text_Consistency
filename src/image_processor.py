@@ -91,26 +91,58 @@ class ImageProcessor:
     def _load_autodl_model(self):
         """从AutoDL社区镜像加载本地Qwen2.5-VL模型"""
         import torch
-        from transformers import AutoProcessor, AutoModelForVision2Seq
+        from transformers import AutoProcessor, AutoModelForVision2Seq, BitsAndBytesConfig
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"正在加载 AutoDL 本地模型: {self.local_model_path}")
         print(f"使用设备: {device}")
+        
+        # 先清理显存
+        if device == "cuda":
+            torch.cuda.empty_cache()
+            print(f"当前显存使用: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
 
         self.processor = AutoProcessor.from_pretrained(
             self.local_model_path,
             trust_remote_code=True
         )
 
-        self.model = AutoModelForVision2Seq.from_pretrained(
-            self.local_model_path,
-            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
-            device_map="auto" if device == "cuda" else "cpu",
-            trust_remote_code=True
-        )
-
-        if device == "cpu":
-            self.model = self.model.to("cpu")
+        if device == "cuda":
+            # 先尝试正常加载（你的 24GB 显存应该够）
+            try:
+                print("尝试使用 bfloat16 加载...")
+                torch.cuda.empty_cache()
+                self.model = AutoModelForVision2Seq.from_pretrained(
+                    self.local_model_path,
+                    torch_dtype=torch.bfloat16,
+                    device_map="auto",
+                    trust_remote_code=True
+                )
+                print("bfloat16 加载成功!")
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower():
+                    print("显存不足，尝试 8-bit 量化...")
+                    torch.cuda.empty_cache()
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_8bit=True,
+                        llm_int8_threshold=6.0,
+                    )
+                    self.model = AutoModelForVision2Seq.from_pretrained(
+                        self.local_model_path,
+                        quantization_config=quantization_config,
+                        device_map="auto",
+                        trust_remote_code=True
+                    )
+                    print("8-bit 量化加载成功!")
+                else:
+                    raise
+        else:
+            self.model = AutoModelForVision2Seq.from_pretrained(
+                self.local_model_path,
+                torch_dtype=torch.float32,
+                device_map="cpu",
+                trust_remote_code=True
+            )
 
         print("AutoDL Qwen2.5-VL 模型加载完成")
 
@@ -363,16 +395,26 @@ class ImageProcessor:
             inputs = {k: v.to("cuda") for k, v in inputs.items()}
 
         print(f"[DEBUG] 开始模型生成 (max_new_tokens=256)...")
+        print(f"[DEBUG] 生成前显存使用: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
         t3 = time.time()
+        
+        # 使用 torch.cuda.amp.autocast() 减少显存使用
         with torch.no_grad():
-            output_ids = self.model.generate(
-                **inputs,
-                max_new_tokens=256,  # 减少到 256，加快生成速度
-                do_sample=False,
-                temperature=None,
-                top_p=None,
-            )
+            with torch.cuda.amp.autocast():
+                output_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=256,
+                    do_sample=False,
+                    temperature=None,
+                    top_p=None,
+                )
+        
+        # 立即释放输入张量
+        del inputs
+        torch.cuda.empty_cache()
+        
         print(f"[DEBUG] 模型生成完成, 耗时: {time.time()-t3:.2f}s")
+        print(f"[DEBUG] 生成后显存使用: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
 
         input_ids = inputs.get("input_ids")
         if input_ids is not None:
