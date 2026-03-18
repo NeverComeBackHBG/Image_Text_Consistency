@@ -124,6 +124,23 @@ class ImageProcessor:
             cache_dir=self.cache_dir
         )
 
+    def _detect_image_format(self, content: bytes) -> str:
+        """根据图片内容检测格式"""
+        # WebP: RIFF....WEBP
+        if content[:4] == b'RIFF' and content[8:12] == b'WEBP':
+            return '.webp'
+        # JPEG: FF D8 FF
+        elif content[:2] == b'\xff\xd8':
+            return '.jpg'
+        # PNG: 89 50 4E 47
+        elif content[:4] == b'\x89PNG':
+            return '.png'
+        # GIF: 47 49 46 38
+        elif content[:4] == b'GIF8':
+            return '.gif'
+        else:
+            return '.jpg'  # 默认
+    
     def _download_image(self, image_path: str) -> str:
         """
         下载图片到本地临时目录
@@ -135,17 +152,7 @@ class ImageProcessor:
         if not image_path.startswith(('http://', 'https://')):
             return image_path
         
-        # 生成临时文件名
-        ext = '.jpg'  # 默认使用 jpg
-        if '.png' in image_path.lower():
-            ext = '.png'
-        elif '.webp' in image_path.lower():
-            ext = '.webp'
-        
-        temp_filename = f"{uuid.uuid4().hex}{ext}"
-        temp_path = os.path.join(self.temp_dir, temp_filename)
-        
-        print(f"正在下载图片到: {temp_path}")
+        print(f"正在下载图片: {image_path}")
         
         # 下载图片
         headers = {
@@ -154,11 +161,17 @@ class ImageProcessor:
         response = requests.get(image_path, headers=headers, timeout=30)
         response.raise_for_status()
         
+        # 根据实际内容检测格式
+        ext = self._detect_image_format(response.content)
+        
+        temp_filename = f"{uuid.uuid4().hex}{ext}"
+        temp_path = os.path.join(self.temp_dir, temp_filename)
+        
         # 保存到本地
         with open(temp_path, 'wb') as f:
             f.write(response.content)
         
-        print(f"图片下载完成: {temp_path}")
+        print(f"图片下载完成: {temp_path} (格式: {ext})")
         return temp_path
 
     def _load_image(self, image_path: str) -> Image.Image:
