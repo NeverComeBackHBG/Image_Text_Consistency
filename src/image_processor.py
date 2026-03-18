@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 from PIL import Image
 import requests
 import base64
+import io
 
 
 class ImageProcessor:
@@ -115,6 +116,19 @@ class ImageProcessor:
             cache_dir=self.cache_dir
         )
 
+    def _load_image_from_url(self, url: str) -> Image.Image:
+        """从URL加载图像"""
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        # 关键修复：使用 io.BytesIO 包装二进制数据
+        image = Image.open(io.BytesIO(response.content)).convert('RGB')
+        return image
+
+    def _load_image_from_path(self, path: str) -> Image.Image:
+        """从本地路径加载图像"""
+        image = Image.open(path).convert('RGB')
+        return image
+
     def process(self, image_path: str) -> Dict[str, any]:
         """处理图像，提取名词和形容词"""
         print(f"正在处理图像: {image_path}")
@@ -157,11 +171,9 @@ class ImageProcessor:
 
         # 加载图像
         if image_path.startswith('http://') or image_path.startswith('https://'):
-            response = requests.get(image_path, timeout=30)
-            response.raise_for_status()
-            image = Image.open(response.content).convert('RGB')
+            image = self._load_image_from_url(image_path)
         else:
-            image = Image.open(image_path).convert('RGB')
+            image = self._load_image_from_path(image_path)
 
         messages = [
             {
@@ -212,9 +224,10 @@ class ImageProcessor:
         """使用本地Ollama处理图像"""
         # 加载图像为base64
         if image_path.startswith('http://') or image_path.startswith('https://'):
-            response = requests.get(image_path, timeout=30)
-            response.raise_for_status()
-            img_bytes = response.content
+            image = self._load_image_from_url(image_path)
+            img_byte_arr = io.BytesIO()
+            image.save(img_byte_arr, format='JPEG')
+            img_bytes = img_byte_arr.getvalue()
         else:
             with open(image_path, 'rb') as f:
                 img_bytes = f.read()
@@ -300,9 +313,10 @@ class ImageProcessor:
     def _process_openrouter(self, image_path: str) -> str:
         """使用OpenRouter API处理图像"""
         if image_path.startswith('http://') or image_path.startswith('https://'):
-            response = requests.get(image_path, timeout=30)
-            response.raise_for_status()
-            img_bytes = response.content
+            image = self._load_image_from_url(image_path)
+            img_byte_arr = io.BytesIO()
+            image.save(img_byte_arr, format='JPEG')
+            img_bytes = img_byte_arr.getvalue()
         else:
             with open(image_path, 'rb') as f:
                 img_bytes = f.read()
