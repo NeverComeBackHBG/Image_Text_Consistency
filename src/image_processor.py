@@ -77,6 +77,15 @@ class ImageProcessor:
             self._load_huggingface_model()
 
         self._loaded = True
+        
+        # 预热模型（可选，加速第一次推理）
+        print("模型预热中...")
+        try:
+            self._warmup()
+            print("模型预热完成")
+        except Exception as e:
+            print(f"预热失败: {e}")
+        
         print("视觉模型就绪")
 
     def _load_autodl_model(self):
@@ -104,6 +113,48 @@ class ImageProcessor:
             self.model = self.model.to("cpu")
 
         print("AutoDL Qwen2.5-VL 模型加载完成")
+
+    def _warmup(self):
+        """预热模型，加速第一次推理"""
+        import torch
+        from PIL import Image
+        import io
+        
+        # 创建一个简单的测试图片
+        dummy_image = Image.new('RGB', (224, 224), color='white')
+        
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "描述这张图片"},
+                    {"type": "image", "image": dummy_image}
+                ]
+            }
+        ]
+        
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        
+        inputs = self.processor(
+            text=[text],
+            images=dummy_image,
+            return_tensors="pt",
+            padding=True
+        )
+        
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if device == "cuda":
+            inputs = {k: v.to("cuda") for k, v in inputs.items()}
+        
+        # 执行一次快速推理
+        with torch.no_grad():
+            _ = self.model.generate(
+                **inputs,
+                max_new_tokens=10,  # 只生成少量 token 预热
+                do_sample=False,
+            )
 
     def _load_huggingface_model(self):
         """从HuggingFace加载模型"""
@@ -154,12 +205,31 @@ class ImageProcessor:
         
         print(f"正在下载图片: {image_path}")
         
-        # 下载图片
+        # 下载图片 - 添加更多 headers 避免防盗链
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Referer': 'https://www.xiaohongshu.com/',
         }
-        response = requests.get(image_path, headers=headers, timeout=30)
-        response.raise_for_status()
+        
+        try:
+            response = requests.get(image_path, headers=headers, timeout=30)
+            response.raise_for_status()
+        except Exception as e:
+            print(f"[ERROR] 下载失败: {e}")
+            raise
+        
+        # 检查内容类型
+        content_type = response.headers.get('Content-Type', '')
+        print(f"[DEBUG] Content-Type: {content_type}")
+        
+        # 检查是否是图片
+        if not content_type.startswith('image/'):
+            # 可能是 HTML 错误页面
+            preview = response.content[:200]
+            print(f"[ERROR] 返回的不是图片! 内容预览: {preview}")
+            raise ValueError(f"下载的不是图片，Content-Type: {content_type}")
         
         # 根据实际内容检测格式
         ext = self._detect_image_format(response.content)
@@ -171,7 +241,17 @@ class ImageProcessor:
         with open(temp_path, 'wb') as f:
             f.write(response.content)
         
-        print(f"图片下载完成: {temp_path} (格式: {ext})")
+        # 验证文件是否有效
+        try:
+            from PIL import Image
+            img = Image.open(temp_path)
+            img.verify()  # 验证图片完整性
+            print(f"图片下载完成: {temp_path} (格式: {ext}, 尺寸: {img.size})")
+        except Exception as e:
+            print(f"[ERROR] 下载的文件不是有效图片: {e}")
+            os.remove(temp_path)
+            raise ValueError(f"下载的文件无效: {e}")
+        
         return temp_path
 
     def _load_image(self, image_path: str) -> Image.Image:
@@ -240,9 +320,15 @@ class ImageProcessor:
     def _process_autodl(self, image_path: str) -> str:
         """使用AutoDL本地Qwen2.5-VL模型处理图像"""
         import torch
-
+        import time
+        
+        print(f"[DEBUG] _process_autodl 接收路径: {image_path}")
+        
         # 直接加载本地图片
+        print(f"[DEBUG] 开始加载图片...")
+        t0 = time.time()
         image = Image.open(image_path).convert('RGB')
+        print(f"[DEBUG] 图片加载完成, 耗时: {time.time()-t0:.2f}s, 尺寸: {image.size}")
 
         messages = [
             {
@@ -254,29 +340,39 @@ class ImageProcessor:
             }
         ]
 
+        print(f"[DEBUG] 开始 apply_chat_template...")
+        t1 = time.time()
         text = self.processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
+        print(f"[DEBUG] chat_template 完成, 耗时: {time.time()-t1:.2f}s")
 
+        print(f"[DEBUG] 开始处理输入...")
+        t2 = time.time()
         inputs = self.processor(
             text=[text],
             images=image,
             return_tensors="pt",
             padding=True
         )
+        print(f"[DEBUG] 输入处理完成, 耗时: {time.time()-t2:.2f}s")
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"[DEBUG] 使用设备: {device}")
         if device == "cuda":
             inputs = {k: v.to("cuda") for k, v in inputs.items()}
 
+        print(f"[DEBUG] 开始模型生成 (max_new_tokens=256)...")
+        t3 = time.time()
         with torch.no_grad():
             output_ids = self.model.generate(
                 **inputs,
-                max_new_tokens=512,
+                max_new_tokens=256,  # 减少到 256，加快生成速度
                 do_sample=False,
                 temperature=None,
                 top_p=None,
             )
+        print(f"[DEBUG] 模型生成完成, 耗时: {time.time()-t3:.2f}s")
 
         input_ids = inputs.get("input_ids")
         if input_ids is not None:
