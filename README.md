@@ -47,6 +47,25 @@
 
 ## 快速开始
 
+### 方式一：AutoDL云端部署（推荐）
+
+1. **租用服务器**：选择 RTX 4090/3090 + PyTorch官方镜像
+2. **克隆项目**：
+   ```bash
+   git clone https://github.com/你的仓库名/Image_Text_Consistency.git
+   cd Image_Text_Consistency
+   ```
+3. **一键安装**：
+   ```bash
+   bash install.sh
+   ```
+4. **运行**：
+   ```bash
+   python main.py --input data/input/你的数据.json --output data/output/result.json
+   ```
+
+### 方式二：本地安装
+
 ### 1. 安装依赖
 
 ```bash
