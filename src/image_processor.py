@@ -7,6 +7,7 @@
 import json
 import os
 import re
+import uuid
 from typing import Dict, List, Optional
 from PIL import Image
 import requests
@@ -36,7 +37,8 @@ class ImageProcessor:
         base_url: str = "http://localhost:11434",
         api_key: Optional[str] = None,
         cache_dir: str = "./models",
-        local_model_path: str = "/root/models/Qwen2.5-VL-7B-Instruct"
+        local_model_path: str = "/root/models/Qwen2.5-VL-7B-Instruct",
+        temp_dir: str = "./temp_images"
     ):
         """
         初始化图像处理器
@@ -48,6 +50,7 @@ class ImageProcessor:
             api_key: API密钥
             cache_dir: 模型缓存目录
             local_model_path: AutoDL本地模型路径
+            temp_dir: 临时图片下载目录
         """
         self.provider = provider
         self.model_name = model
@@ -55,7 +58,11 @@ class ImageProcessor:
         self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
         self.cache_dir = cache_dir
         self.local_model_path = local_model_path
+        self.temp_dir = temp_dir
         self._loaded = False
+
+        # 创建临时目录
+        os.makedirs(self.temp_dir, exist_ok=True)
 
     def load(self):
         """加载模型"""
@@ -117,16 +124,51 @@ class ImageProcessor:
             cache_dir=self.cache_dir
         )
 
-    def _load_image_from_url(self, url: str) -> Image.Image:
-        """从URL加载图像"""
-        response = requests.get(url, timeout=30)
+    def _download_image(self, image_path: str) -> str:
+        """
+        下载图片到本地临时目录
+        
+        Returns:
+            本地图片路径
+        """
+        # 如果是本地路径，直接返回
+        if not image_path.startswith(('http://', 'https://')):
+            return image_path
+        
+        # 生成临时文件名
+        ext = '.jpg'  # 默认使用 jpg
+        if '.png' in image_path.lower():
+            ext = '.png'
+        elif '.webp' in image_path.lower():
+            ext = '.webp'
+        
+        temp_filename = f"{uuid.uuid4().hex}{ext}"
+        temp_path = os.path.join(self.temp_dir, temp_filename)
+        
+        print(f"正在下载图片到: {temp_path}")
+        
+        # 下载图片
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(image_path, headers=headers, timeout=30)
         response.raise_for_status()
-        image = Image.open(io.BytesIO(response.content)).convert('RGB')
-        return image
+        
+        # 保存到本地
+        with open(temp_path, 'wb') as f:
+            f.write(response.content)
+        
+        print(f"图片下载完成: {temp_path}")
+        return temp_path
 
-    def _load_image_from_path(self, path: str) -> Image.Image:
-        """从本地路径加载图像"""
-        image = Image.open(path).convert('RGB')
+    def _load_image(self, image_path: str) -> Image.Image:
+        """加载图像（支持URL和本地路径）"""
+        if image_path.startswith(('http://', 'https://')):
+            # 先下载到本地
+            local_path = self._download_image(image_path)
+            image = Image.open(local_path).convert('RGB')
+        else:
+            image = Image.open(image_path).convert('RGB')
         return image
 
     def process(self, image_path: str) -> Dict[str, any]:
@@ -136,15 +178,23 @@ class ImageProcessor:
         if not self._loaded:
             self.load()
 
+        local_image_path = None
         try:
+            # 如果是URL，先下载
+            if image_path.startswith(('http://', 'https://')):
+                local_image_path = self._download_image(image_path)
+                process_path = local_image_path
+            else:
+                process_path = image_path
+
             if self.provider == "autodl":
-                content = self._process_autodl(image_path)
+                content = self._process_autodl(process_path)
             elif self.provider == "ollama":
-                content = self._process_ollama(image_path)
+                content = self._process_ollama(process_path)
             elif self.provider == "huggingface":
-                content = self._process_huggingface(image_path)
+                content = self._process_huggingface(process_path)
             elif self.provider == "openrouter":
-                content = self._process_openrouter(image_path)
+                content = self._process_openrouter(process_path)
             else:
                 raise ValueError(f"不支持的provider: {self.provider}")
 
@@ -156,6 +206,15 @@ class ImageProcessor:
             traceback.print_exc()
             nouns = []
             adjectives = []
+
+        finally:
+            # 清理临时文件
+            if local_image_path and os.path.exists(local_image_path):
+                try:
+                    os.remove(local_image_path)
+                    print(f"已清理临时文件: {local_image_path}")
+                except:
+                    pass
 
         return {
             "nouns": nouns,
@@ -169,10 +228,8 @@ class ImageProcessor:
         """使用AutoDL本地Qwen2.5-VL模型处理图像"""
         import torch
 
-        if image_path.startswith('http://') or image_path.startswith('https://'):
-            image = self._load_image_from_url(image_path)
-        else:
-            image = self._load_image_from_path(image_path)
+        # 直接加载本地图片
+        image = Image.open(image_path).convert('RGB')
 
         messages = [
             {
@@ -220,14 +277,8 @@ class ImageProcessor:
 
     def _process_ollama(self, image_path: str) -> str:
         """使用本地Ollama处理图像"""
-        if image_path.startswith('http://') or image_path.startswith('https://'):
-            image = self._load_image_from_url(image_path)
-            img_byte_arr = io.BytesIO()
-            image.save(img_byte_arr, format='JPEG')
-            img_bytes = img_byte_arr.getvalue()
-        else:
-            with open(image_path, 'rb') as f:
-                img_bytes = f.read()
+        with open(image_path, 'rb') as f:
+            img_bytes = f.read()
 
         img_str = base64.b64encode(img_bytes).decode()
 
@@ -309,14 +360,8 @@ class ImageProcessor:
 
     def _process_openrouter(self, image_path: str) -> str:
         """使用OpenRouter API处理图像"""
-        if image_path.startswith('http://') or image_path.startswith('https://'):
-            image = self._load_image_from_url(image_path)
-            img_byte_arr = io.BytesIO()
-            image.save(img_byte_arr, format='JPEG')
-            img_bytes = img_byte_arr.getvalue()
-        else:
-            with open(image_path, 'rb') as f:
-                img_bytes = f.read()
+        with open(image_path, 'rb') as f:
+            img_bytes = f.read()
 
         img_str = base64.b64encode(img_bytes).decode()
 
@@ -400,7 +445,6 @@ class ImageProcessor:
 
     def _fix_incomplete_json(self, content: str) -> str:
         """修复不完整的 JSON"""
-        # 移除尾部不完整的内容
         content = content.strip()
 
         # 找到最后一个完整的元素
@@ -454,6 +498,14 @@ class ImageProcessor:
             print(f"正则提取也失败: {e}")
 
         return nouns, adjectives
+
+    def cleanup_temp(self):
+        """清理所有临时文件"""
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+            os.makedirs(self.temp_dir, exist_ok=True)
+            print(f"已清理临时目录: {self.temp_dir}")
 
 
 def test():
