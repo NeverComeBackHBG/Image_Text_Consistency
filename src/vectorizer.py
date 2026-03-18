@@ -35,23 +35,52 @@ class Vectorizer:
         os.environ['HF_HOME'] = self.cache_dir
         os.environ['TRANSFORMERS_CACHE'] = self.cache_dir
 
+        # 设置HuggingFace镜像源（国内加速）
+        if 'HF_ENDPOINT' not in os.environ:
+            os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+
+        # 设置下载超时时间
+        os.environ['HF_HUB_DOWNLOAD_TIMEOUT'] = '300'
+
         self.model = None
         self._loaded = False
 
     def load(self):
-        """加载BGE-M3模型（延迟加载）"""
+        """加载BGE-M3模型（延迟加载，带重试机制）"""
         if self._loaded:
             return
 
         print(f"正在加载BGE-M3模型: {self.model_name}")
         print(f"模型缓存目录: {self.cache_dir}")
-        print("首次运行需要下载模型，请耐心等待...")
+        print(f"下载源: {os.environ.get('HF_ENDPOINT', 'huggingface')}")
+        print("首次运行需要下载模型（约200MB），请耐心等待...")
 
-        # 使用FP16加速，减少显存占用
-        self.model = FlagModel(self.model_name, use_fp16=True)
+        max_retries = 3
+        retry_count = 0
 
-        self._loaded = True
-        print("BGE-M3模型加载完成")
+        while retry_count < max_retries:
+            try:
+                # 使用FP16加速，减少显存占用
+                self.model = FlagModel(self.model_name, use_fp16=True)
+                self._loaded = True
+                print("BGE-M3模型加载完成")
+                return
+            except Exception as e:
+                retry_count += 1
+                print(f"下载失败 ({retry_count}/{max_retries}): {str(e)[:100]}")
+                if retry_count < max_retries:
+                    print("5秒后重试...")
+                    import time
+                    time.sleep(5)
+                else:
+                    print("下载失败，请检查网络连接或尝试手动下载模型")
+
+                    # 提供手动下载方案
+                    print("\n===== 手动下载方案 =====")
+                    print(f"1. 从以下地址下载模型: https://huggingface.co/{self.model_name}")
+                    print(f"2. 解压到: {os.path.abspath(self.cache_dir)}")
+                    print("========================\n")
+                    raise e
 
     def encode(self, texts: List[str]) -> np.ndarray:
         """
